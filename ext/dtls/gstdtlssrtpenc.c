@@ -30,6 +30,8 @@
 #include "gstdtlssrtpenc.h"
 
 #include <stdio.h>
+// #include "../srtp/gstsrtp-enumtypes.h"
+//#include "../srtp/gstsrtp.h"
 
 static GstStaticPadTemplate rtp_sink_template =
     GST_STATIC_PAD_TEMPLATE ("rtp_sink_%d",
@@ -65,6 +67,10 @@ G_DEFINE_TYPE_WITH_CODE (GstDtlsSrtpEnc, gst_dtls_srtp_enc,
         "dtlssrtpenc", 0, "DTLS Decoder"));
 
 #define DEFAULT_DTLS_KEY NULL
+#define DEFAULT_RTP_CIPHER      GST_SRTP_CIPHER_AES_128_ICM
+#define DEFAULT_RTP_AUTH        GST_SRTP_AUTH_HMAC_SHA1_80
+#define DEFAULT_RTCP_CIPHER     DEFAULT_RTP_CIPHER
+#define DEFAULT_RTCP_AUTH       DEFAULT_RTP_AUTH
 
 enum
 {
@@ -149,6 +155,7 @@ gst_dtls_srtp_enc_class_init (GstDtlsSrtpEncClass * klass)
 			G_STRUCT_OFFSET (GstDtlsSrtpEncClass, on_handshake_complete),
 			 NULL, NULL, g_cclosure_marshal_generic, G_TYPE_NONE, 1, G_TYPE_STRING);
 
+/*
   properties[PROP_IS_CLIENT] =
       g_param_spec_boolean ("is-client",
       "Is client",
@@ -156,6 +163,14 @@ gst_dtls_srtp_enc_class_init (GstDtlsSrtpEncClass * klass)
       "client and initiate the handshake",
       DEFAULT_IS_CLIENT,
       GST_PARAM_MUTABLE_READY | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+*/
+
+	 g_object_class_install_property (gobject_class, PROP_IS_CLIENT,
+      g_param_spec_boolean ("is-client", 
+          "prop dtls key ",
+          "The transport used to send and receive RTP and RTCP packets.",
+          DEFAULT_IS_CLIENT,
+          GST_PARAM_MUTABLE_READY | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
 	 g_object_class_install_property (gobject_class, PROP_DTLS_KEY,
       g_param_spec_boxed ("key", 
@@ -164,9 +179,27 @@ gst_dtls_srtp_enc_class_init (GstDtlsSrtpEncClass * klass)
           GST_TYPE_BUFFER,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
+/*
+	 g_object_class_install_property (gobject_class, PROP_RTP_CIPHER,
+      g_param_spec_enum ("rtp-cipher", 
+          "prop dtls key ",
+          "The transport used to send and receive RTP and RTCP packets.",
+          GST_TYPE_SRTP_CIPHER_TYPE,DEFAULT_RTP_CIPHER,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+	 g_object_class_install_property (gobject_class, PROP_RTP_AUTH,
+      g_param_spec_enum ("rtp-auth", 
+          "prop dtls key ",
+          "The transport used to send and receive RTP and RTCP packets.",
+          0, DEFAULT_RTP_AUTH,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+*/
+
+
 	klass->on_handshake_complete = gst_dtls_srtp_enc_on_handshake_complete;
 
-  g_object_class_install_properties (gobject_class, NUM_PROPERTIES, properties);
+//  g_object_class_install_properties (gobject_class, NUM_PROPERTIES, properties);
+//  g_object_class_install_properties (gobject_class, 1, properties);
 
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&rtp_sink_template));
@@ -247,8 +280,22 @@ gst_dtls_srtp_enc_init (GstDtlsSrtpEnc * self)
 
   g_object_set (self->srtp_enc, "random-key", TRUE, NULL);
 
+	/* lunker:: bind prop for session clustering */
   g_object_bind_property (G_OBJECT (self), "key", self->srtp_enc, "key",
       G_BINDING_DEFAULT);
+/*
+  g_object_bind_property (G_OBJECT (self), "rtp-cipher", self->srtp_enc, "rtp-cipher",
+      G_BINDING_DEFAULT);
+  g_object_bind_property (G_OBJECT (self), "rtp-auth", self->srtp_enc, "rtp-auth",
+      G_BINDING_DEFAULT);
+
+  g_object_bind_property (G_OBJECT (self), "rtp-cipher", self->srtp_enc, "rtcp-cipher",
+      G_BINDING_DEFAULT);
+  g_object_bind_property (G_OBJECT (self), "rtp-auth", self->srtp_enc, "rtcp-auth",
+      G_BINDING_DEFAULT);
+*/
+
+
   g_object_bind_property_full (G_OBJECT (self), "srtp-cipher", self->srtp_enc,
       "rtp-cipher", G_BINDING_DEFAULT, (GBindingTransformFunc) transform_enum,
       NULL, cipher_enum_class, NULL);
@@ -261,7 +308,9 @@ gst_dtls_srtp_enc_init (GstDtlsSrtpEnc * self)
   g_object_bind_property_full (G_OBJECT (self), "srtcp-auth", self->srtp_enc,
       "rtcp-auth", G_BINDING_DEFAULT, (GBindingTransformFunc) transform_enum,
       NULL, auth_enum_class, NULL);
+
 	g_object_set (self->srtp_enc, "key", NULL, NULL);
+
 }
 
 static gboolean
@@ -301,12 +350,25 @@ gst_dtls_srtp_enc_set_property (GObject * object,
             "tried to set is-client after disabling DTLS");
       }
       break;
+
 		case PROP_DTLS_KEY:
 			if( self->dtls_key) 
 				gst_buffer_unref (self->dtls_key);
 			self->dtls_key = g_value_dup_boxed (value);
 			GST_WARNING ("### set prop 'dtls_key' with value '[%p]'", self->dtls_key);
 			break;
+/*
+		case PROP_RTP_CIPHER:
+      self->rtp_cipher = g_value_get_enum (value);
+      GST_INFO_OBJECT (object, "Set property: rtp cipher=%d",
+          self->rtp_cipher);
+      break;
+		case PROP_RTP_AUTH:
+      self->rtp_auth = g_value_get_enum (value);
+      GST_INFO_OBJECT (object, "Set property: rtp auth=%d", self->rtp_auth);
+      break;
+*/
+
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
   }
@@ -332,6 +394,15 @@ gst_dtls_srtp_enc_get_property (GObject * object,
 			if(self->dtls_key)
 				g_value_set_boxed (value, self->dtls_key);
 			break;
+/*
+		case PROP_RTP_CIPHER:
+      g_value_set_enum (value, self->rtp_cipher);
+      break;
+    case PROP_RTP_AUTH:
+      g_value_set_enum (value, self->rtp_auth);
+      break;
+*/
+
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
   }

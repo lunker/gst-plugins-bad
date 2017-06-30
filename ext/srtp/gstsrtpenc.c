@@ -648,7 +648,7 @@ gst_srtp_enc_set_property (GObject * object, guint prop_id,
       filter->key = g_value_dup_boxed (value);
       filter->key_changed = TRUE;
       GST_INFO_OBJECT (object, "Set property: key=[%p]", filter->key);
-//			GST_INFO_OBJECT (object, "set property: key=[%s]", g_base64_encode (filter->key, 30));
+			GST_INFO_OBJECT (object, "set property: key=[%s]", g_base64_encode (filter->key, 30));
       break;
 
     case PROP_RTP_CIPHER:

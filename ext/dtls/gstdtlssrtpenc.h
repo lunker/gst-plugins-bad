@@ -30,6 +30,7 @@
 
 #include <gst/gst.h>
 
+
 G_BEGIN_DECLS
 
 #define GST_TYPE_DTLS_SRTP_ENC (gst_dtls_srtp_enc_get_type())
@@ -47,6 +48,8 @@ struct _GstDtlsSrtpEnc {
     GstElement *srtp_enc;
     GstElement *funnel;
 		GstBuffer *dtls_key;
+		guint rtp_cipher;
+		guint rtp_auth;
 };
 
 struct _GstDtlsSrtpEncClass {
