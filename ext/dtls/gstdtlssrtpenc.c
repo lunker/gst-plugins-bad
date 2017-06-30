@@ -64,9 +64,12 @@ G_DEFINE_TYPE_WITH_CODE (GstDtlsSrtpEnc, gst_dtls_srtp_enc,
     GST_TYPE_DTLS_SRTP_BIN, GST_DEBUG_CATEGORY_INIT (gst_dtls_srtp_enc_debug,
         "dtlssrtpenc", 0, "DTLS Decoder"));
 
+#define DEFAULT_DTLS_KEY NULL
+
 enum
 {
   SIGNAL_ON_KEY_SET,
+	SIGNAL_ON_HANDSHAKE_COMPLETE,
   NUM_SIGNALS
 };
 
@@ -76,6 +79,7 @@ enum
 {
   PROP_0,
   PROP_IS_CLIENT,
+	PROP_DTLS_KEY,
   NUM_PROPERTIES
 };
 
@@ -101,6 +105,14 @@ static void on_key_received (GObject * encoder, GstDtlsSrtpEnc *);
 static void gst_dtls_srtp_enc_remove_dtls_element (GstDtlsSrtpBin *);
 static GstPadProbeReturn remove_dtls_encoder_probe_callback (GstPad *,
     GstPadProbeInfo *, GstElement *);
+
+static gchar*
+gst_dtls_srtp_enc_on_handshake_complete (GstDtlsSrtpEnc * self, gchar* key)
+{
+	GST_WARNING ("### wow !!!! ");
+	return key;
+}
+
 
 static void
 gst_dtls_srtp_enc_class_init (GstDtlsSrtpEncClass * klass)
@@ -129,6 +141,13 @@ gst_dtls_srtp_enc_class_init (GstDtlsSrtpEncClass * klass)
       G_SIGNAL_RUN_LAST, 0, NULL, NULL,
       g_cclosure_marshal_generic, G_TYPE_NONE, 0);
 
+	signals[SIGNAL_ON_HANDSHAKE_COMPLETE] =
+      g_signal_new ("on-handshake-complete", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, 
+			G_STRUCT_OFFSET (GstDtlsSrtpEncClass, on_handshake_complete),
+			 NULL, NULL, g_cclosure_marshal_generic, G_TYPE_NONE, 1, G_TYPE_STRING);
+
+
   properties[PROP_IS_CLIENT] =
       g_param_spec_boolean ("is-client",
       "Is client",
@@ -136,6 +155,34 @@ gst_dtls_srtp_enc_class_init (GstDtlsSrtpEncClass * klass)
       "client and initiate the handshake",
       DEFAULT_IS_CLIENT,
       GST_PARAM_MUTABLE_READY | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+/*
+	properties[PROP_DTLS_KEY] =
+      g_param_spec_boxed ("key",
+      "Is client",
+      "Set to true if the decoder should act as "
+      "client and initiate the handshake",
+      DEFAULT_DTLS_KEY,
+      GST_TYPE_STRUCTURE,  G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+*/	
+
+/*
+	g_object_class_install_property (gobject_class, PROP_DTLS_KEY,
+      g_param_spec_boxed ("key", "key", "Master key (minimum of "
+          G_STRINGIFY (MASTER_128_KEY_SIZE) " and maximum of "
+          G_STRINGIFY (MASTER_256_KEY_SIZE) " bytes)",
+          GST_TYPE_BUFFER, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+          GST_PARAM_MUTABLE_PLAYING));
+*/
+
+	 g_object_class_install_property (gobject_class, PROP_DTLS_KEY,
+      g_param_spec_boxed ("key", 
+          "prop dtls key ",
+          "The transport used to send and receive RTP and RTCP packets.",
+          GST_TYPE_BUFFER,
+          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+	klass->on_handshake_complete = gst_dtls_srtp_enc_on_handshake_complete;
 
   g_object_class_install_properties (gobject_class, NUM_PROPERTIES, properties);
 
@@ -232,6 +279,7 @@ gst_dtls_srtp_enc_init (GstDtlsSrtpEnc * self)
   g_object_bind_property_full (G_OBJECT (self), "srtcp-auth", self->srtp_enc,
       "rtcp-auth", G_BINDING_DEFAULT, (GBindingTransformFunc) transform_enum,
       NULL, auth_enum_class, NULL);
+	g_object_set (self->srtp_enc, "key", NULL, NULL);
 }
 
 static gboolean
@@ -271,6 +319,12 @@ gst_dtls_srtp_enc_set_property (GObject * object,
             "tried to set is-client after disabling DTLS");
       }
       break;
+		case PROP_DTLS_KEY:
+			if( self->dtls_key) 
+				gst_buffer_unref (self->dtls_key);
+			self->dtls_key = g_value_dup_boxed (value);
+			GST_WARNING ("### set prop 'dtls_key' with value '[%p]'", self->dtls_key);
+			break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
   }
@@ -292,6 +346,10 @@ gst_dtls_srtp_enc_get_property (GObject * object,
             "tried to get is-client after disabling DTLS");
       }
       break;
+		case PROP_DTLS_KEY:
+			if(self->dtls_key)
+				g_value_set_boxed (value, self->dtls_key);
+			break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
   }
@@ -386,6 +444,8 @@ on_key_received (GObject * encoder, GstDtlsSrtpEnc * self)
   GstDtlsSrtpBin *bin = GST_DTLS_SRTP_BIN (self);
   GstBuffer *buffer = NULL;
   guint cipher, auth;
+	gchar * key_str=NULL;
+
 
   if (!(bin->key_is_set || bin->srtp_cipher || bin->srtp_auth
           || bin->srtcp_cipher || bin->srtcp_auth)) {
@@ -400,8 +460,13 @@ on_key_received (GObject * encoder, GstDtlsSrtpEnc * self)
         "rtcp-auth", auth, "key", buffer, "random-key", FALSE, NULL);
 
     gst_buffer_unref (buffer);
+	
+		// set length hardcode for test 
+		key_str = g_base64_encode (buffer, 30); 
+		GST_WARNING ("### dtls-master-key : '%s'", key_str);
 
     g_signal_emit (self, signals[SIGNAL_ON_KEY_SET], 0);
+		g_signal_emit (self, signals[SIGNAL_ON_HANDSHAKE_COMPLETE], 0,g_strdup (key_str), TRUE );
   } else {
     GST_DEBUG_OBJECT (self,
         "ignoring keys received from DTLS handshake, key struct is set");

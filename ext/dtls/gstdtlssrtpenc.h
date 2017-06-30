@@ -46,10 +46,13 @@ struct _GstDtlsSrtpEnc {
 
     GstElement *srtp_enc;
     GstElement *funnel;
+		GstBuffer *dtls_key;
 };
 
 struct _GstDtlsSrtpEncClass {
     GstDtlsSrtpBinClass parent_class;
+
+		gchar* (*on_handshake_complete) (GstDtlsSrtpEnc * encoder, gchar *key);
 };
 
 GType gst_dtls_srtp_enc_get_type(void);
