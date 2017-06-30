@@ -80,6 +80,8 @@ enum
   PROP_0,
   PROP_IS_CLIENT,
 	PROP_DTLS_KEY,
+//	PROP_RTP_CIPHER,
+//	PROP_RTP_AUTH,
   NUM_PROPERTIES
 };
 
@@ -147,7 +149,6 @@ gst_dtls_srtp_enc_class_init (GstDtlsSrtpEncClass * klass)
 			G_STRUCT_OFFSET (GstDtlsSrtpEncClass, on_handshake_complete),
 			 NULL, NULL, g_cclosure_marshal_generic, G_TYPE_NONE, 1, G_TYPE_STRING);
 
-
   properties[PROP_IS_CLIENT] =
       g_param_spec_boolean ("is-client",
       "Is client",
@@ -155,25 +156,6 @@ gst_dtls_srtp_enc_class_init (GstDtlsSrtpEncClass * klass)
       "client and initiate the handshake",
       DEFAULT_IS_CLIENT,
       GST_PARAM_MUTABLE_READY | G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
-
-/*
-	properties[PROP_DTLS_KEY] =
-      g_param_spec_boxed ("key",
-      "Is client",
-      "Set to true if the decoder should act as "
-      "client and initiate the handshake",
-      DEFAULT_DTLS_KEY,
-      GST_TYPE_STRUCTURE,  G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
-*/	
-
-/*
-	g_object_class_install_property (gobject_class, PROP_DTLS_KEY,
-      g_param_spec_boxed ("key", "key", "Master key (minimum of "
-          G_STRINGIFY (MASTER_128_KEY_SIZE) " and maximum of "
-          G_STRINGIFY (MASTER_256_KEY_SIZE) " bytes)",
-          GST_TYPE_BUFFER, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
-          GST_PARAM_MUTABLE_PLAYING));
-*/
 
 	 g_object_class_install_property (gobject_class, PROP_DTLS_KEY,
       g_param_spec_boxed ("key", 
@@ -445,7 +427,6 @@ on_key_received (GObject * encoder, GstDtlsSrtpEnc * self)
   GstBuffer *buffer = NULL;
   guint cipher, auth;
 	gchar * key_str=NULL;
-
 
   if (!(bin->key_is_set || bin->srtp_cipher || bin->srtp_auth
           || bin->srtcp_cipher || bin->srtcp_auth)) {
