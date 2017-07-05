@@ -28,10 +28,11 @@
 #endif
 
 #include "gstdtlssrtpenc.h"
+#include "gstdtlsconnection.h"
 
 #include <stdio.h>
 // #include "../srtp/gstsrtp-enumtypes.h"
-//#include "../srtp/gstsrtp.h"
+// #include "../srtp/gstsrtp.h"
 
 static GstStaticPadTemplate rtp_sink_template =
     GST_STATIC_PAD_TEMPLATE ("rtp_sink_%d",
@@ -71,11 +72,15 @@ G_DEFINE_TYPE_WITH_CODE (GstDtlsSrtpEnc, gst_dtls_srtp_enc,
 #define DEFAULT_RTP_AUTH        GST_SRTP_AUTH_HMAC_SHA1_80
 #define DEFAULT_RTCP_CIPHER     DEFAULT_RTP_CIPHER
 #define DEFAULT_RTCP_AUTH       DEFAULT_RTP_AUTH
+#define DEFAULT_SRTP_CIPHER 0
+#define DEFAULT_SRTP_AUTH 0
 
 enum
 {
   SIGNAL_ON_KEY_SET,
 	SIGNAL_ON_HANDSHAKE_COMPLETE,
+	SIGNAL_ON_SAVE_DTLS_ENC_INFO,
+	SIGNAL_INVOKE_ON_KEY_RECEIVED,
   NUM_SIGNALS
 };
 
@@ -86,6 +91,9 @@ enum
   PROP_0,
   PROP_IS_CLIENT,
 	PROP_DTLS_KEY,
+	PROP_ENCODER_KEY,
+	PROP_SRTP_AUTH,
+	PROP_SRTP_CIPHER,
 //	PROP_RTP_CIPHER,
 //	PROP_RTP_AUTH,
   NUM_PROPERTIES
@@ -109,6 +117,8 @@ static GstPad *gst_dtls_srtp_enc_request_new_pad (GstElement *,
     GstPadTemplate *, const gchar * name, const GstCaps *);
 
 static void on_key_received (GObject * encoder, GstDtlsSrtpEnc *);
+static void on_save_dtls_enc_info (GObject * encoder, GstStructure *enc_info,  GstDtlsSrtpEnc * self);
+
 
 static void gst_dtls_srtp_enc_remove_dtls_element (GstDtlsSrtpBin *);
 static GstPadProbeReturn remove_dtls_encoder_probe_callback (GstPad *,
@@ -119,6 +129,18 @@ gst_dtls_srtp_enc_on_handshake_complete (GstDtlsSrtpEnc * self, gchar* key)
 {
 	GST_WARNING ("### wow !!!! ");
 	return key;
+}
+
+static void 
+gst_dtls_srtp_enc_invoke_on_key_received (GstDtlsSrtpEnc * self)
+{
+//	GST_DTLS_SRTP_ENC
+	GST_DEBUG ("### forcely invoke 'on-key-received' ");
+
+	// fucking logic 
+	//force_on_key_received ( (GObject *) self->bin.dtls_element, self);
+	g_signal_emit_by_name ( (GObject *) self->bin.dtls_element, "invoke-on-key-received");
+
 }
 
 
@@ -155,6 +177,18 @@ gst_dtls_srtp_enc_class_init (GstDtlsSrtpEncClass * klass)
 			G_STRUCT_OFFSET (GstDtlsSrtpEncClass, on_handshake_complete),
 			 NULL, NULL, g_cclosure_marshal_generic, G_TYPE_NONE, 1, G_TYPE_STRING);
 
+  signals[SIGNAL_ON_SAVE_DTLS_ENC_INFO] = 
+      g_signal_new ("on-save-dtls-enc-info", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, 0, NULL, NULL,
+      g_cclosure_marshal_generic, G_TYPE_NONE, 1, GST_TYPE_STRUCTURE);
+
+  signals[SIGNAL_INVOKE_ON_KEY_RECEIVED] =
+      g_signal_new ("invoke-on-key-received", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, 
+			G_STRUCT_OFFSET (GstDtlsSrtpEncClass, invoke_on_key_received), 
+			NULL, NULL,
+      g_cclosure_marshal_generic, G_TYPE_NONE, 0);
+
 /*
   properties[PROP_IS_CLIENT] =
       g_param_spec_boolean ("is-client",
@@ -179,27 +213,35 @@ gst_dtls_srtp_enc_class_init (GstDtlsSrtpEncClass * klass)
           GST_TYPE_BUFFER,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
-/*
-	 g_object_class_install_property (gobject_class, PROP_RTP_CIPHER,
-      g_param_spec_enum ("rtp-cipher", 
+
+	 g_object_class_install_property (gobject_class, PROP_ENCODER_KEY,
+      g_param_spec_boxed ("encoder-key", 
           "prop dtls key ",
           "The transport used to send and receive RTP and RTCP packets.",
-          GST_TYPE_SRTP_CIPHER_TYPE,DEFAULT_RTP_CIPHER,
+          GST_TYPE_BUFFER,
           G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
-	 g_object_class_install_property (gobject_class, PROP_RTP_AUTH,
-      g_param_spec_enum ("rtp-auth", 
-          "prop dtls key ",
-          "The transport used to send and receive RTP and RTCP packets.",
-          0, DEFAULT_RTP_AUTH,
-          G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
-*/
+	 g_object_class_install_property (gobject_class, PROP_SRTP_CIPHER,
+     g_param_spec_uint ("srtp-cipher",
+      "SRTP cipher",
+      "The SRTP cipher selected in the DTLS handshake. "
+      "The value will be set to an GstDtlsSrtpCipher.",
+      0, GST_DTLS_SRTP_CIPHER_AES_128_ICM, DEFAULT_SRTP_CIPHER,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
+
+	 g_object_class_install_property (gobject_class, PROP_SRTP_AUTH,
+      g_param_spec_uint ("srtp-auth",
+      "SRTP authentication",
+      "The SRTP authentication selected in the DTLS handshake. "
+      "The value will be set to an GstDtlsSrtpAuth.",
+      0, GST_DTLS_SRTP_AUTH_HMAC_SHA1_80, DEFAULT_SRTP_AUTH,
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS));
 
 
 	klass->on_handshake_complete = gst_dtls_srtp_enc_on_handshake_complete;
+	klass->invoke_on_key_received = gst_dtls_srtp_enc_invoke_on_key_received;
 
 //  g_object_class_install_properties (gobject_class, NUM_PROPERTIES, properties);
-//  g_object_class_install_properties (gobject_class, 1, properties);
 
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&rtp_sink_template));
@@ -267,6 +309,13 @@ gst_dtls_srtp_enc_init (GstDtlsSrtpEnc * self)
   g_signal_connect (self->bin.dtls_element, "on-key-received",
       G_CALLBACK (on_key_received), self);
 
+	/* lunker:: add for handling signal 'on-save-dtls-enc-info' */
+	g_signal_connect (self->bin.dtls_element, "on-save-dtls-enc-info", G_CALLBACK (on_save_dtls_enc_info), self);
+	g_object_bind_property (self, "encoder-key", self->bin.dtls_element, "encoder-key", G_BINDING_DEFAULT);
+	g_object_bind_property (self, "srtp-auth", self->bin.dtls_element, "srtp-auth", G_BINDING_DEFAULT);
+	g_object_bind_property (self, "srtp-cipher", self->bin.dtls_element, "srtp-cipher", G_BINDING_DEFAULT);
+	
+
   if (g_once_init_enter (&cipher_enum_class)) {
     GType type = g_type_from_name ("GstSrtpCipherType");
     g_assert (type);
@@ -283,7 +332,9 @@ gst_dtls_srtp_enc_init (GstDtlsSrtpEnc * self)
 	/* lunker:: bind prop for session clustering */
   g_object_bind_property (G_OBJECT (self), "key", self->srtp_enc, "key",
       G_BINDING_DEFAULT);
+
 /*
+
   g_object_bind_property (G_OBJECT (self), "rtp-cipher", self->srtp_enc, "rtp-cipher",
       G_BINDING_DEFAULT);
   g_object_bind_property (G_OBJECT (self), "rtp-auth", self->srtp_enc, "rtp-auth",
@@ -294,7 +345,6 @@ gst_dtls_srtp_enc_init (GstDtlsSrtpEnc * self)
   g_object_bind_property (G_OBJECT (self), "rtp-auth", self->srtp_enc, "rtcp-auth",
       G_BINDING_DEFAULT);
 */
-
 
   g_object_bind_property_full (G_OBJECT (self), "srtp-cipher", self->srtp_enc,
       "rtp-cipher", G_BINDING_DEFAULT, (GBindingTransformFunc) transform_enum,
@@ -350,12 +400,26 @@ gst_dtls_srtp_enc_set_property (GObject * object,
             "tried to set is-client after disabling DTLS");
       }
       break;
-
+		case PROP_ENCODER_KEY:
+			if (self->encoder_key)
+				gst_buffer_unref (self->encoder_key);
+			self->encoder_key = g_value_dup_boxed (value);
+			GST_DEBUG ("### set prop 'encoder-key' with value '[%p]'", self->encoder_key);
+			// GST_DEBUG ("### set prop 'encoder-key' with value '[%s]'",  g_base64_encode (self->encoder_key,30) );
+			break;
 		case PROP_DTLS_KEY:
 			if( self->dtls_key) 
 				gst_buffer_unref (self->dtls_key);
 			self->dtls_key = g_value_dup_boxed (value);
-			GST_WARNING ("### set prop 'dtls_key' with value '[%p]'", self->dtls_key);
+			GST_DEBUG ("### set prop 'dtls-key' with value '[%p]'", self->dtls_key);
+			break;
+		case PROP_SRTP_CIPHER:
+			self->srtp_cipher = g_value_get_uint (value);
+			GST_DEBUG ("### set prop 'srtp-cipher' with value '[%d]'", self->srtp_cipher);
+			break;
+		case PROP_SRTP_AUTH:
+			self->srtp_auth = g_value_get_uint (value);
+			GST_DEBUG ("### set prop 'srtp-auth' with value '[%d]'", self->srtp_auth);		
 			break;
 /*
 		case PROP_RTP_CIPHER:
@@ -394,6 +458,15 @@ gst_dtls_srtp_enc_get_property (GObject * object,
 			if(self->dtls_key)
 				g_value_set_boxed (value, self->dtls_key);
 			break;
+		case PROP_ENCODER_KEY:
+				g_value_set_boxed (value, self->encoder_key);
+			break;
+		case PROP_SRTP_AUTH:
+			g_value_set_uint (value, self->srtp_auth);
+			break;
+		case PROP_SRTP_CIPHER:
+			g_value_set_uint (value, self->srtp_cipher);
+			break;
 /*
 		case PROP_RTP_CIPHER:
       g_value_set_enum (value, self->rtp_cipher);
@@ -402,7 +475,6 @@ gst_dtls_srtp_enc_get_property (GObject * object,
       g_value_set_enum (value, self->rtp_auth);
       break;
 */
-
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
   }
@@ -499,11 +571,16 @@ on_key_received (GObject * encoder, GstDtlsSrtpEnc * self)
   guint cipher, auth;
 	gchar * key_str=NULL;
 
+	GST_DEBUG ("### handler for signal 'on-key-received' from gstdtlsenc");
+
   if (!(bin->key_is_set || bin->srtp_cipher || bin->srtp_auth
           || bin->srtcp_cipher || bin->srtcp_auth)) {
     g_object_get (encoder,
         "encoder-key", &buffer,
         "srtp-cipher", &cipher, "srtp-auth", &auth, NULL);
+
+		GST_DEBUG ("### get prop 'srtp-cipher' with value '%d'", cipher);
+		GST_DEBUG ("### get prop 'srtp-auth' with value '%d'", auth);
 
     g_object_set (self->srtp_enc,
         "rtp-cipher", cipher,
@@ -523,6 +600,14 @@ on_key_received (GObject * encoder, GstDtlsSrtpEnc * self)
     GST_DEBUG_OBJECT (self,
         "ignoring keys received from DTLS handshake, key struct is set");
   }
+}
+
+static void 
+on_save_dtls_enc_info (GObject * encoder, GstStructure *enc_info,  GstDtlsSrtpEnc * self)
+{
+	GST_WARNING ("###  signal 'on-save-dtls-enc-info'");
+	
+	g_signal_emit (self, signals[SIGNAL_ON_SAVE_DTLS_ENC_INFO], 0, enc_info);
 }
 
 static void

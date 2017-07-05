@@ -178,16 +178,25 @@ gst_dtls_srtp_bin_set_property (GObject * object,
       self->key = g_value_dup_boxed (value);
       self->key_is_set = TRUE;
       klass->remove_dtls_element (self);
+			g_debug ("### set prop 'key' on gstdtlssrtpbin");
+			{
+				GstMapInfo info;
+
+				gst_buffer_map (self->key, &info, GST_MAP_READ);
+				g_debug ("### set prop 'key' on gstdtlssrtpbin with value '%s'", g_base64_encode (info.data,30) );
+			}
       break;
     case PROP_SRTP_AUTH:
       g_free (self->srtp_auth);
       self->srtp_auth = g_value_dup_string (value);
       klass->remove_dtls_element (self);
+			g_warning ("### set prop_srtp_auth with value '%s'", self->srtp_auth);
       break;
     case PROP_SRTP_CIPHER:
       g_free (self->srtp_cipher);
       self->srtp_cipher = g_value_dup_string (value);
       klass->remove_dtls_element (self);
+			g_warning ("### set prop_srtp_cipher with value '%s'", self->srtp_cipher);
       break;
     case PROP_SRTCP_AUTH:
       g_free (self->srtcp_auth);
@@ -223,6 +232,13 @@ gst_dtls_srtp_bin_get_property (GObject * object,
       if (self->key) {
         g_value_set_boxed (value, self->key);
       }
+			
+			{
+				GstMapInfo info;
+
+				gst_buffer_map (self->key, &info, GST_MAP_READ);
+				g_debug ("### get prop 'key' on gstdtlssrtpbin with value '%s'", g_base64_encode (info.data,30) );
+			}
       break;
     case PROP_SRTP_AUTH:
       g_value_set_string (value, self->srtp_auth);

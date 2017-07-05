@@ -495,6 +495,11 @@ get_stream_from_caps (GstSrtpDec * filter, GstCaps * caps, guint32 ssrc)
   rtp_auth = gst_structure_get_string (s, "srtp-auth");
   rtcp_cipher = gst_structure_get_string (s, "srtcp-cipher");
   rtcp_auth = gst_structure_get_string (s, "srtcp-auth");
+	// lunker:: log for test value 
+	GST_DEBUG ("### get_stream_from_caps():: is using ?");
+	GST_DEBUG ("### gst strcuture :\n\%s", gst_structure_to_string (s));
+	GST_DEBUG ("### prop 'rtp-cipher' value '%s'", rtp_cipher);
+	GST_DEBUG ("### prop 'rtp-auth' value '%s'", rtp_auth);
   if (!rtp_cipher || !rtp_auth || !rtcp_cipher || !rtcp_auth)
     goto error;
 
@@ -522,7 +527,15 @@ get_stream_from_caps (GstSrtpDec * filter, GstCaps * caps, guint32 ssrc)
   }
 
   if (gst_structure_get (s, "srtp-key", GST_TYPE_BUFFER, &buf, NULL) || !buf) {
+		GstMapInfo info;
+		gst_buffer_map (buf, &info, GST_MAP_READ);
     GST_DEBUG_OBJECT (filter, "Got key [%p] for SSRC %u", buf, ssrc);
+    GST_DEBUG_OBJECT (filter, "Got key [%s] for SSRC %u", g_base64_encode (info.data,30) , ssrc);
+
+//		gst_buffer_map (buf, &info, GST_MAP_READ);
+
+//    GST_DEBUG_OBJECT (filter, "test for srtp-key in GstSrtpDec, [%s]", g_base64_encode (info.data,30) , ssrc);
+			
     stream->key = buf;
   } else if (STREAM_HAS_CRYPTO (stream)) {
     goto error;
@@ -630,6 +643,7 @@ validate_buffer (GstSrtpDec * filter, GstBuffer * buf, guint32 * ssrc,
     if (gst_rtp_buffer_get_payload_type (&rtpbuf) < 64
         || gst_rtp_buffer_get_payload_type (&rtpbuf) > 80) {
       *ssrc = gst_rtp_buffer_get_ssrc (&rtpbuf);
+			GST_DEBUG ("### validate_buffer get srrc, value '%d'", *ssrc);
 
       gst_rtp_buffer_unmap (&rtpbuf);
       *is_rtcp = FALSE;
@@ -756,9 +770,14 @@ request_key_with_signal (GstSrtpDec * filter, guint32 ssrc, gint signal)
   GstCaps *caps;
   GstSrtpDecSsrcStream *stream = NULL;
 
+//	GST_DEBUG ("### parameter ::\n ssrc: '%d' \nsignal :'%d'", ssrc, signal);
+	GST_DEBUG ("### parameter [ssrc] %" G_GUINT64_FORMAT , ssrc);
+	GST_DEBUG ("### parameter [signal] %d",signal);
+
   caps = signal_get_srtp_params (filter, ssrc, signal);
 
   if (caps) {
+		GST_DEBUG ("### caps value '%s'", gst_caps_to_string (caps) );
     stream = update_session_stream_from_caps (filter, ssrc, caps);
     if (stream)
       GST_DEBUG_OBJECT (filter, "New stream set with SSRC %u", ssrc);
@@ -829,13 +848,17 @@ gst_srtp_dec_sink_event_rtp (GstPad * pad, GstObject * parent, GstEvent * event)
   GstCaps *caps;
   GstSrtpDec *filter = GST_SRTP_DEC (parent);
 
+	GST_DEBUG ("### gst_srtp_dec_sink_event_rtp()");
+
   switch (GST_EVENT_TYPE (event)) {
     case GST_EVENT_CAPS:
+			GST_DEBUG ("### event for 'GST_EVENT_CAPS'");
       gst_event_parse_caps (event, &caps);
       ret = gst_srtp_dec_sink_setcaps (pad, parent, caps, FALSE);
       gst_event_unref (event);
       return ret;
     case GST_EVENT_SEGMENT:
+			GST_DEBUG ("### event for 'GST_EVENT_SEGMENT'");
       /* Make sure to send a caps event downstream before the segment event,
        * even if upstream didn't */
       if (!gst_pad_has_current_caps (filter->rtp_srcpad)) {
@@ -847,6 +870,7 @@ gst_srtp_dec_sink_event_rtp (GstPad * pad, GstObject * parent, GstEvent * event)
       filter->rtp_has_segment = TRUE;
       break;
     case GST_EVENT_FLUSH_STOP:
+			GST_DEBUG ("### event for 'GST_EVENT_FLUSH_STOP'");
       filter->rtp_has_segment = FALSE;
       break;
     default:

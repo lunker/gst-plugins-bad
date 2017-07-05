@@ -30,6 +30,7 @@
 #include "gstdtlsenc.h"
 
 #include "gstdtlsdec.h"
+#include <string.h>
 
 static GstStaticPadTemplate sink_template = GST_STATIC_PAD_TEMPLATE ("sink",
     GST_PAD_SINK,
@@ -52,6 +53,8 @@ G_DEFINE_TYPE_WITH_CODE (GstDtlsEnc, gst_dtls_enc, GST_TYPE_ELEMENT,
 enum
 {
   SIGNAL_ON_KEY_RECEIVED,
+	SIGNAL_FORCE_ON_KEY_RECEIVED,
+	SIGNAL_ON_SAVE_DTLS_ENC_INFO,
   NUM_SIGNALS
 };
 
@@ -103,6 +106,12 @@ static void on_key_received (GstDtlsConnection *, gpointer key, guint cipher,
 static void on_send_data (GstDtlsConnection *, gconstpointer data, gint length,
     GstDtlsEnc *);
 
+static void force_on_key_received (GstDtlsConnection *, gpointer key, guint cipher,
+    guint auth, GstDtlsEnc *);
+
+// static void gst_dtls_enc_force_on_key_received (GstDtlsEnc * self);
+static void gst_dtls_enc_invoke_on_key_received (GstDtlsEnc * self);
+
 static void
 gst_dtls_enc_class_init (GstDtlsEncClass * klass)
 {
@@ -126,6 +135,35 @@ gst_dtls_enc_class_init (GstDtlsEncClass * klass)
       G_SIGNAL_RUN_LAST, 0, NULL, NULL,
       g_cclosure_marshal_generic, G_TYPE_NONE, 0);
 
+
+  signals[SIGNAL_FORCE_ON_KEY_RECEIVED] =
+      g_signal_new ("invoke-on-key-received", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, G_STRUCT_OFFSET (GstDtlsEncClass, invoke_on_key_received), NULL, NULL,
+      g_cclosure_marshal_generic, G_TYPE_NONE, 0);
+
+
+/*
+	signals[SIGNAL_ON_SAVE_ENC_INFO] =
+      g_signal_new ("on-save-enc-info", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST | G_SIGNAL_ACTION, 
+			G_STRUCT_OFFSET (GstDtlsEncClass, on_save_enc_info), NULL, NULL,
+      g_cclosure_marshal_generic, GST_TYPE_STRUCTURE, 0);
+*/
+
+/*
+	signals[SIGNAL_ON_SAVE_DTLS_ENC_INFO] =
+      g_signal_new ("on-save-dtls-enc-info", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, 
+			0,  NULL, NULL,
+      g_cclosure_marshal_generic, GST_TYPE_STRUCTURE, 0);
+*/
+
+	signals[SIGNAL_ON_SAVE_DTLS_ENC_INFO] =
+      g_signal_new ("on-save-dtls-enc-info", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, 
+			0,  NULL, NULL,
+      g_cclosure_marshal_generic, G_TYPE_NONE, 1, GST_TYPE_STRUCTURE);
+
   properties[PROP_CONNECTION_ID] =
       g_param_spec_string ("connection-id",
       "Connection id",
@@ -144,7 +182,7 @@ gst_dtls_enc_class_init (GstDtlsEncClass * klass)
       g_param_spec_boxed ("encoder-key",
       "Encoder key",
       "Master key that should be used by the SRTP encoder",
-      GST_TYPE_BUFFER, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+      GST_TYPE_BUFFER, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   properties[PROP_SRTP_CIPHER] =
       g_param_spec_uint ("srtp-cipher",
@@ -152,7 +190,7 @@ gst_dtls_enc_class_init (GstDtlsEncClass * klass)
       "The SRTP cipher selected in the DTLS handshake. "
       "The value will be set to an GstDtlsSrtpCipher.",
       0, GST_DTLS_SRTP_CIPHER_AES_128_ICM, DEFAULT_SRTP_CIPHER,
-      G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   properties[PROP_SRTP_AUTH] =
       g_param_spec_uint ("srtp-auth",
@@ -160,9 +198,11 @@ gst_dtls_enc_class_init (GstDtlsEncClass * klass)
       "The SRTP authentication selected in the DTLS handshake. "
       "The value will be set to an GstDtlsSrtpAuth.",
       0, GST_DTLS_SRTP_AUTH_HMAC_SHA1_80, DEFAULT_SRTP_AUTH,
-      G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+      G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   g_object_class_install_properties (gobject_class, NUM_PROPERTIES, properties);
+
+	klass->invoke_on_key_received = gst_dtls_enc_invoke_on_key_received;
 
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&src_template));
@@ -246,6 +286,17 @@ gst_dtls_enc_set_property (GObject * object, guint prop_id,
     case PROP_IS_CLIENT:
       self->is_client = g_value_get_boolean (value);
       break;
+		case PROP_ENCODER_KEY:
+			if (self->encoder_key) 
+				gst_buffer_unref (self->encoder_key);
+			self->encoder_key = g_value_dup_boxed (value);
+			break;
+		case PROP_SRTP_AUTH:
+			self->srtp_auth = g_value_get_uint (value);
+			break;
+		case PROP_SRTP_CIPHER:
+			self->srtp_cipher = g_value_get_uint (value);
+			break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
   }
@@ -269,6 +320,7 @@ gst_dtls_enc_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_SRTP_CIPHER:
       g_value_set_uint (value, self->srtp_cipher);
+			GST_DEBUG ("### get prop 'srtp-cipher' value '%d'", self->srtp_cipher);
       break;
     case PROP_SRTP_AUTH:
       g_value_set_uint (value, self->srtp_auth);
@@ -553,10 +605,85 @@ on_key_received (GstDtlsConnection * connection, gpointer key, guint cipher,
 
   key_str = g_base64_encode (key, GST_DTLS_SRTP_MASTER_KEY_LENGTH);
   GST_INFO_OBJECT (self, "received key: %s", key_str);
-  g_free (key_str);
+
+/*
+	{
+	// delete test code
+		GstBuffer *buff=NULL;
+		gpointer tmp;
+		gsize len;
+		gchar * tmp_str;
+		GstMapInfo *mInfo;
+
+		tmp = g_base64_decode (key_str, &len);
+		GST_DEBUG ("### decoded length : %d", len);
+
+		buff = gst_buffer_new_wrapped ( tmp , 30);
+		tmp_str = g_base64_encode (buff, 30);
+
+		gst_buffer_map (self->encoder_key, mInfo, GST_MAP_READ);
+
+		GST_DEBUG ("### LUNKER : '%s'", tmp_str );
+		GST_DEBUG ("### LUNKER2 : '%s'", g_base64_decode ( (gchar*) mInfo->data, &len) );
+		GST_DEBUG ("### LUNKER3 : '%s'", g_base_64_decode (self->encoder_key, &len) );
+	}
+*/
 
   g_signal_emit (self, signals[SIGNAL_ON_KEY_RECEIVED], 0);
+
+	/* lunker:: generate enc-info structure for session clustering */
+	{
+		GstStructure *enc_info = gst_structure_new ("dtls-enc-info", 
+			"encoder-key", G_TYPE_STRING, key_str,
+			"srtp-auth",G_TYPE_UINT, self->srtp_auth,
+			"srtp-cipher",  G_TYPE_UINT, self->srtp_cipher,
+			"is-client", G_TYPE_BOOLEAN,self->is_client, NULL
+		);
+		GST_WARNING ("### [gstdtlsenc] before create gst structure");
+	
+		GST_WARNING ("### [gstdtlsenc] before fire signal 'on-save-dtls-dec-info'");
+		g_signal_emit (self, signals[SIGNAL_ON_SAVE_DTLS_ENC_INFO], 0, enc_info);
+		GST_WARNING ("### [gstdtlsenc] after fire signal 'on-save-dtls-dec-info'");
+
+		// lunker::TODO need to call free func immediately?
+		// gst_structure_free (enc_info);
+	}// end signal 'dtls_enc_info' 
+	
+  g_free (key_str);
 }
+
+
+static void
+force_on_key_received (GstDtlsConnection * connection, gpointer key, guint cipher,
+    guint auth, GstDtlsEnc * self)
+{
+  gpointer key_dup;
+  gchar *key_str;
+
+  g_return_if_fail (GST_IS_DTLS_ENC (self));
+  g_return_if_fail (GST_IS_DTLS_CONNECTION (connection));
+
+  self->srtp_cipher = cipher;
+  self->srtp_auth = auth;
+
+  key_dup = g_memdup (key, GST_DTLS_SRTP_MASTER_KEY_LENGTH);
+
+  if (self->encoder_key) {
+    gst_buffer_unref (self->encoder_key);
+    self->encoder_key = NULL;
+  }
+
+  self->encoder_key =
+      gst_buffer_new_wrapped (key_dup, GST_DTLS_SRTP_MASTER_KEY_LENGTH);
+
+  key_str = g_base64_encode (key, GST_DTLS_SRTP_MASTER_KEY_LENGTH);
+  GST_INFO_OBJECT (self, "received key: %s", key_str);
+
+  g_signal_emit (self, signals[SIGNAL_ON_KEY_RECEIVED], 0);
+
+  g_free (key_str);
+}
+
 
 static void
 on_send_data (GstDtlsConnection * connection, gconstpointer data, gint length,
@@ -586,3 +713,19 @@ on_send_data (GstDtlsConnection * connection, gconstpointer data, gint length,
   GST_TRACE_OBJECT (self, "send data: releasing lock");
   g_mutex_unlock (&self->queue_lock);
 }
+
+/*
+	forcely call on_key_received for session clustering 
+	same logic with on_key_received, without generate save_webrtc_info signal
+*/
+static void 
+gst_dtls_enc_invoke_on_key_received (GstDtlsEnc * self)
+{
+	GstMapInfo map_info;
+	GST_DEBUG ("### handler for signal 'invoke-on-key-received'");
+	gst_buffer_map (self->encoder_key, &map_info, GST_MAP_READ);	
+
+	force_on_key_received (self->connection, map_info.data, self->srtp_cipher, self->srtp_auth, self);
+}
+
+

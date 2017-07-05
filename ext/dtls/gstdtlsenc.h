@@ -67,6 +67,8 @@ struct _GstDtlsEnc {
 
 struct _GstDtlsEncClass {
     GstElementClass parent_class;
+
+		void (* invoke_on_key_received) (GstDtlsEnc * self);
 };
 
 GType gst_dtls_enc_get_type(void);

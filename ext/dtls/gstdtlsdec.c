@@ -52,6 +52,9 @@ G_DEFINE_TYPE_WITH_CODE (GstDtlsDec, gst_dtls_dec, GST_TYPE_ELEMENT,
 enum
 {
   SIGNAL_ON_KEY_RECEIVED,
+	SIGNAL_ON_SAVE_DTLS_DEC_INFO, 
+	SIGNAL_INVOKE_ON_KEY_RECEIVED,
+	SIGNAL_INVOKE_ON_PEER_CERTIFICATE_RECEIVED,
   NUM_SIGNALS
 };
 
@@ -107,6 +110,12 @@ static void agent_weak_ref_notify (gchar * pem, GstDtlsAgent *);
 static void create_connection (GstDtlsDec *, gchar * id);
 static void connection_weak_ref_notify (gchar * id, GstDtlsConnection *);
 
+static void gst_dtls_dec_invoke_on_key_received (GstDtlsDec * self, guint cipher, guint auth);
+static void force_on_key_received (GstDtlsConnection *, gpointer key, guint cipher,
+    guint auth, GstDtlsDec *);
+
+static void gst_dtls_dec_invoke_on_peer_certificate_received (GstDtlsDec * self, gchar *peer_pem);
+
 static void
 gst_dtls_dec_class_init (GstDtlsDecClass * klass)
 {
@@ -131,6 +140,26 @@ gst_dtls_dec_class_init (GstDtlsDecClass * klass)
       G_SIGNAL_RUN_LAST, 0, NULL, NULL,
       g_cclosure_marshal_generic, G_TYPE_NONE, 0);
 
+	signals[SIGNAL_ON_SAVE_DTLS_DEC_INFO] =
+      g_signal_new ("on-save-dtls-dec-info", 
+			G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, 0, NULL, NULL,
+      g_cclosure_marshal_generic, G_TYPE_NONE, 1, GST_TYPE_STRUCTURE);
+
+	signals[SIGNAL_INVOKE_ON_KEY_RECEIVED] =
+      g_signal_new ("invoke-on-key-received", 
+			G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, 
+			G_STRUCT_OFFSET (GstDtlsDecClass, invoke_on_key_received ), NULL, NULL,
+      g_cclosure_marshal_generic, G_TYPE_NONE, 2, G_TYPE_UINT, G_TYPE_UINT);
+
+	signals[SIGNAL_INVOKE_ON_PEER_CERTIFICATE_RECEIVED] =
+      g_signal_new ("invoke-on-peer-certificate-received", 
+			G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, 
+			G_STRUCT_OFFSET (GstDtlsDecClass, invoke_on_peer_certificate_received ), NULL, NULL,
+      g_cclosure_marshal_generic, G_TYPE_NONE, 1, G_TYPE_STRING);
+
   properties[PROP_CONNECTION_ID] =
       g_param_spec_string ("connection-id",
       "Connection id",
@@ -147,13 +176,13 @@ gst_dtls_dec_class_init (GstDtlsDecClass * klass)
       g_param_spec_string ("peer-pem",
       "Peer PEM string",
       "The X509 certificate received in the DTLS handshake, in PEM format",
-      DEFAULT_PEER_PEM, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+      DEFAULT_PEER_PEM, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   properties[PROP_DECODER_KEY] =
       g_param_spec_boxed ("decoder-key",
       "Decoder key",
       "SRTP key that should be used by the decoder",
-      GST_TYPE_CAPS, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
+      GST_TYPE_CAPS, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
 
   properties[PROP_SRTP_CIPHER] =
       g_param_spec_uint ("srtp-cipher",
@@ -172,6 +201,10 @@ gst_dtls_dec_class_init (GstDtlsDecClass * klass)
       G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
 
   g_object_class_install_properties (gobject_class, NUM_PROPERTIES, properties);
+
+	klass->invoke_on_key_received = gst_dtls_dec_invoke_on_key_received;
+	klass->invoke_on_peer_certificate_received = gst_dtls_dec_invoke_on_peer_certificate_received;
+
 
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&src_template));
@@ -272,6 +305,24 @@ gst_dtls_dec_set_property (GObject * object, guint prop_id,
         create_connection (self, self->connection_id);
       }
       break;
+		case PROP_PEER_PEM:
+			self->peer_pem = g_value_dup_string (value); 
+			GST_DEBUG ("### set prop 'peer-pem' ");
+			break;
+		case PROP_DECODER_KEY:
+			if ( self->decoder_key ) { 
+				gst_buffer_unref (self->decoder_key);
+			}	
+			self->decoder_key = g_value_dup_boxed (value);
+			{
+				GstMapInfo info;
+    GstStructure *dec_info = NULL;
+    gsize len;
+    gst_buffer_map (self->decoder_key, &info, GST_MAP_READ);
+        GST_DEBUG ("### set prop [decoder-key] ; '%s'", g_base64_encode ( info.data, 30));
+        GST_DEBUG ("### set prop [decoder-key] ;'%d'", *(info.data));
+			}
+			break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
   }
@@ -296,12 +347,20 @@ gst_dtls_dec_get_property (GObject * object, guint prop_id, GValue * value,
       break;
     case PROP_DECODER_KEY:
       g_value_set_boxed (value, self->decoder_key);
+			{   
+        GstMapInfo info;
+
+        gst_buffer_map (self->decoder_key, &info, GST_MAP_READ);
+        g_debug ("### get prop 'key' on gstdtlsdec with value '%s'", g_base64_encode (info.data,30) );
+      } 
       break;
     case PROP_SRTP_CIPHER:
       g_value_set_uint (value, self->srtp_cipher);
+			GST_DEBUG ("### get prop 'srtp-cipher' value '%d'", self->srtp_cipher);
       break;
     case PROP_SRTP_AUTH:
       g_value_set_uint (value, self->srtp_auth);
+			GST_DEBUG ("### get prop 'srtp-auth' value '%d'", self->srtp_auth);
       break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
@@ -430,10 +489,70 @@ on_key_received (GstDtlsConnection * connection, gpointer key, guint cipher,
 
   key_str = g_base64_encode (key, GST_DTLS_SRTP_MASTER_KEY_LENGTH);
   GST_INFO_OBJECT (self, "received key: %s", key_str);
-  g_free (key_str);
 
   g_signal_emit (self, signals[SIGNAL_ON_KEY_RECEIVED], 0);
+
+	/* lunker:: generate 'dec_info' structure for save webrtc handshake infos */
+	{	
+		GstMapInfo info;
+		GstStructure *dec_info = NULL;
+		gsize len;
+		gst_buffer_map (self->decoder_key, &info, GST_MAP_READ);
+
+		dec_info = gst_structure_new ("dtls-dec-info", 
+			"decoder-key", G_TYPE_STRING, key_str, 
+			"pem", G_TYPE_STRING, gst_dtls_agent_get_certificate_pem (self->agent), 
+			"peer-pem", G_TYPE_STRING, self->peer_pem,
+			"decoder-key-test", GST_TYPE_BUFFER, self->decoder_key,
+			"decoder-key2", G_TYPE_UINT, *info.data,
+			NULL
+		);
+
+	
+		GST_DEBUG ("### testkey : %s", (guchar* ) info.data );	
+		GST_DEBUG ("### testkey : %d",  *(info.data) );	
+		GST_DEBUG ("### testkey : %s", g_base64_decode (  info.data, &len) );
+		GST_DEBUG ("### testkey : %s", g_base64_encode (  info.data, 30) );
+
+		GST_DEBUG ("### FFFFFFFFFFFFUCK : %s", gst_structure_to_string (dec_info));	
+		GST_WARNING ("### [gstdtlsdec] before fire signal 'on-save-dtls-dec-info'");
+		g_signal_emit (self, signals[SIGNAL_ON_SAVE_DTLS_DEC_INFO], 0, dec_info);
+		GST_WARNING ("### [gstdtlsdec] after fire signal 'on-save-dtls-dec-info'");
+	}
+
+  g_free (key_str);
 }
+
+static void
+force_on_key_received (GstDtlsConnection * connection, gpointer key, guint cipher,
+    guint auth, GstDtlsDec * self)
+{
+  gpointer key_dup;
+  gchar *key_str;
+
+  g_return_if_fail (GST_IS_DTLS_DEC (self));
+
+  self->srtp_cipher = cipher;
+  self->srtp_auth = auth;
+
+  key_dup = g_memdup (key, GST_DTLS_SRTP_MASTER_KEY_LENGTH);
+
+  if (self->decoder_key) {
+    gst_buffer_unref (self->decoder_key);
+    self->decoder_key = NULL;
+  }
+
+  self->decoder_key =
+      gst_buffer_new_wrapped (key_dup, GST_DTLS_SRTP_MASTER_KEY_LENGTH);
+
+  key_str = g_base64_encode (key, GST_DTLS_SRTP_MASTER_KEY_LENGTH);
+  GST_INFO_OBJECT (self, "received key: %s", key_str);
+
+  g_signal_emit (self, signals[SIGNAL_ON_KEY_RECEIVED], 0);
+
+  g_free (key_str);
+}
+
 
 static gboolean
 signal_peer_certificate_received (GWeakRef * ref)
@@ -743,4 +862,25 @@ connection_weak_ref_notify (gchar * id, GstDtlsConnection * connection)
 
   g_free (id);
   id = NULL;
+}
+
+static void 
+gst_dtls_dec_invoke_on_key_received (GstDtlsDec * self, guint cipher, guint auth)
+{	
+	GstMapInfo map_info;
+	
+	GST_DEBUG ("### handler for signal 'invoke-on-key-received'");
+	GST_DEBUG ("### paramter value ::");
+	GST_DEBUG ("### cipher : %d\n auth : %d", cipher, auth);
+
+	gst_buffer_map (self->decoder_key, &map_info, GST_MAP_READ);
+
+	force_on_key_received (self->connection, map_info.data , cipher, auth, self);
+}
+
+static void 
+gst_dtls_dec_invoke_on_peer_certificate_received (GstDtlsDec * self, gchar * peer_pem)
+{
+	GST_DEBUG ("### handler for signal 'invoke-on-peer-certificate-received");
+	on_peer_certificate_received (self->connection, peer_pem, self);
 }

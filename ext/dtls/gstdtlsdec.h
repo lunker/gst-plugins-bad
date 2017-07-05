@@ -67,6 +67,8 @@ struct _GstDtlsDec {
 
 struct _GstDtlsDecClass {
     GstElementClass parent_class;
+		void (* invoke_on_key_received) (GstDtlsDec * self, guint cipher, guint auth);
+		void (* invoke_on_peer_certificate_received) (GstDtlsDec * self, gchar *peer_pem);
 };
 
 GType gst_dtls_dec_get_type(void);

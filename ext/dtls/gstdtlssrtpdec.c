@@ -69,10 +69,20 @@ enum
   PROP_0,
   PROP_PEM,
   PROP_PEER_PEM,
+	PROP_DECODER_KEY,
   NUM_PROPERTIES
 };
 
+enum
+{
+	SIGNAL_ON_SAVE_DTLS_DEC_INFO,
+	SIGNAL_INVOKE_ON_KEY_RECEIVED,
+	SIGNAL_INVOKE_ON_PEER_CERTIFICATE_RECEIVED,
+	NUM_SIGNALS
+};
+
 static GParamSpec *properties[NUM_PROPERTIES];
+static guint signals[NUM_SIGNALS];
 
 #define DEFAULT_PEM NULL
 #define DEFAULT_PEER_PEM NULL
@@ -94,6 +104,11 @@ static void on_peer_pem (GstElement * srtp_decoder, GParamSpec * pspec,
 static void gst_dtls_srtp_dec_remove_dtls_element (GstDtlsSrtpBin *);
 static GstPadProbeReturn remove_dtls_decoder_probe_callback (GstPad *,
     GstPadProbeInfo *, GstElement *);
+
+static void on_save_dtls_dec_info (GObject * encoder, GstStructure *dec_info,  GstDtlsSrtpDec * self);
+
+static void gst_dtls_srtp_dec_invoke_on_key_received (GstDtlsSrtpDec * decoder, guint cipher, guint auth);
+static void gst_dtls_srtp_dec_invoke_on_peer_certificate_received (GstDtlsSrtpDec * decoder, gchar *peer_pem);
 
 static void
 gst_dtls_srtp_dec_class_init (GstDtlsSrtpDecClass * klass)
@@ -119,6 +134,25 @@ gst_dtls_srtp_dec_class_init (GstDtlsSrtpDecClass * klass)
   dtls_srtp_bin_class->remove_dtls_element =
       GST_DEBUG_FUNCPTR (gst_dtls_srtp_dec_remove_dtls_element);
 
+	signals[SIGNAL_ON_SAVE_DTLS_DEC_INFO] = 
+	 g_signal_new ("on-save-dtls-dec-info", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST, 0, NULL, NULL,
+      g_cclosure_marshal_generic, G_TYPE_NONE, 1, GST_TYPE_STRUCTURE);
+
+	signals[SIGNAL_INVOKE_ON_KEY_RECEIVED] = 
+	 g_signal_new ("invoke-on-key-received", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST,
+			G_STRUCT_OFFSET (GstDtlsSrtpDecClass, invoke_on_key_received),
+			NULL, NULL,
+      g_cclosure_marshal_generic, G_TYPE_NONE, 2, G_TYPE_UINT, G_TYPE_UINT);
+
+	signals[SIGNAL_INVOKE_ON_PEER_CERTIFICATE_RECEIVED] = 
+	 g_signal_new ("invoke-on-peer-certificate-received", G_TYPE_FROM_CLASS (klass),
+      G_SIGNAL_RUN_LAST,
+			G_STRUCT_OFFSET (GstDtlsSrtpDecClass, invoke_on_peer_certificate_received),
+			NULL, NULL,
+      g_cclosure_marshal_generic, G_TYPE_NONE, 1, G_TYPE_STRING);
+
   properties[PROP_PEM] =
       g_param_spec_string ("pem",
       "PEM string",
@@ -131,7 +165,17 @@ gst_dtls_srtp_dec_class_init (GstDtlsSrtpDecClass * klass)
       "The X509 certificate received in the DTLS handshake, in PEM format",
       DEFAULT_PEER_PEM, G_PARAM_READABLE | G_PARAM_STATIC_STRINGS);
 
+  properties[PROP_DECODER_KEY] =
+      g_param_spec_boxed ("decoder-key",
+      "Peer PEM string",
+      "The X509 certificate received in the DTLS handshake, in PEM format",
+      GST_TYPE_CAPS, G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS);
+
+
   g_object_class_install_properties (gobject_class, NUM_PROPERTIES, properties);
+
+	klass->invoke_on_key_received = gst_dtls_srtp_dec_invoke_on_key_received;
+	klass->invoke_on_peer_certificate_received = gst_dtls_srtp_dec_invoke_on_peer_certificate_received;
 
   gst_element_class_add_pad_template (element_class,
       gst_static_pad_template_get (&sink_template));
@@ -230,6 +274,14 @@ gst_dtls_srtp_dec_init (GstDtlsSrtpDec * self)
       G_CALLBACK (on_decoder_request_key), self);
   g_signal_connect (self->bin.dtls_element, "notify::peer-pem",
       G_CALLBACK (on_peer_pem), self);
+
+	/* lunker:: connect signal 'on-save-dtls-dec-info' from 'gstdtlsdec' */
+	g_signal_connect (self->bin.dtls_element, "on-save-dtls-dec-info", 
+			G_CALLBACK (on_save_dtls_dec_info), self);
+
+	/* lunker:: bind prop 'decoder-key' with gstdtlsdec */
+	g_object_bind_property ( G_OBJECT (self), "decoder-key", self->bin.dtls_element, "decoder-key", G_BINDING_DEFAULT );
+// 	g_object_bind_property ( G_OBJECT (self), "peer-pem", self->bin.dtls_element, "peer-pem", G_BINDING_DEFAULT );
 }
 
 static void
@@ -246,6 +298,29 @@ gst_dtls_srtp_dec_set_property (GObject * object,
         GST_WARNING_OBJECT (self, "tried to set pem after disabling DTLS");
       }
       break;
+/*
+		case PROP_PEER_PEM:
+//			self->peer_pem = g_value_dup_string (value);
+			g_object_set_property (G_OBJECT (self->bin.dtls_element), "peer-pem", value);
+			break;
+*/
+		case PROP_DECODER_KEY:
+			if (self->decoder_key) {
+        gst_buffer_unref (self->decoder_key);
+      }
+			self->decoder_key = g_value_dup_boxed (value);
+			GST_DEBUG ("### set prop 'decoder-key' on gstdtlssrtpdec ");
+			GST_DEBUG ("### set prop 'decoder-key' with value '%p'", self->decoder_key ); 
+			{
+				GstMapInfo info;
+    GstStructure *dec_info = NULL;
+    gsize len;
+    gst_buffer_map (self->decoder_key, &info, GST_MAP_READ);
+				GST_DEBUG ("### test decoder-key ; '%s'", g_base64_encode ( info.data, 30));
+				GST_DEBUG ("### test decoder-key ; '%d'", *(info.data));
+			}
+//			GST_DEBUG ("### set prop 'decoder-key' with value '%s'", g_base64_encode (self->decoder_key, 30) ); 
+			break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
   }
@@ -273,6 +348,9 @@ gst_dtls_srtp_dec_get_property (GObject * object,
         GST_WARNING_OBJECT (self, "tried to get peer-pem after disabling DTLS");
       }
       break;
+		case PROP_DECODER_KEY:
+			g_value_set_boxed (value, self->decoder_key);
+			break;
     default:
       G_OBJECT_WARN_INVALID_PROPERTY_ID (self, prop_id, pspec);
   }
@@ -352,6 +430,8 @@ on_decoder_request_key (GstElement * srtp_decoder,
   guint cipher;
   guint auth;
 
+	GST_DEBUG ("### on_decoder_request_key CALL?");
+
   if (bin->key_is_set) {
     if (bin->key) {
       if (bin->srtp_cipher && bin->srtp_auth && bin->srtcp_cipher
@@ -387,12 +467,22 @@ on_decoder_request_key (GstElement * srtp_decoder,
     g_object_get (bin->dtls_element,
         "srtp-cipher", &cipher, "srtp-auth", &auth, NULL);
 
+		GST_DEBUG ("### on_decoder_request_key() : srtp-cipher value '%d'", cipher);
+		GST_DEBUG ("### on_decoder_request_key() : srtp-auth value '%d'", auth);
+		{
+			GstMapInfo info;
+			gst_buffer_map (key_buffer, &info, GST_MAP_READ);
+			GST_DEBUG ("### on_decoder_request_key() : decoder-key value '%s'", g_base64_encode (info.data, 30) );
+		}
+
     g_return_val_if_fail (cipher == GST_DTLS_SRTP_CIPHER_AES_128_ICM, NULL);
 
     key_caps = gst_caps_new_simple ("application/x-srtp",
         "srtp-key", GST_TYPE_BUFFER, key_buffer,
         "srtp-cipher", G_TYPE_STRING, "aes-128-icm",
         "srtcp-cipher", G_TYPE_STRING, "aes-128-icm", NULL);
+
+		GST_DEBUG ("### returned key caps '%s'", gst_caps_to_string (key_caps) );
 
     switch (auth) {
       case GST_DTLS_SRTP_AUTH_HMAC_SHA1_32:
@@ -412,12 +502,22 @@ on_decoder_request_key (GstElement * srtp_decoder,
 
     gst_buffer_unref (key_buffer);
 
+
     return key_caps;
   } else {
     GST_WARNING_OBJECT (bin, "no srtp key available yet");
   }
 
   return NULL;
+}
+
+static void 
+on_save_dtls_dec_info (GObject * encoder, GstStructure *dec_info,  GstDtlsSrtpDec * self)
+{
+	GST_WARNING ("### get signal 'on-save-dtls-dec-info' from dtlsdec");
+	GST_WARNING ("### pass signal to kms-elements");
+
+	g_signal_emit (self, signals[SIGNAL_ON_SAVE_DTLS_DEC_INFO] ,0, dec_info );
 }
 
 static void
@@ -465,3 +565,20 @@ remove_dtls_decoder_probe_callback (GstPad * pad,
 
   return GST_PAD_PROBE_OK;
 }
+
+static void 
+gst_dtls_srtp_dec_invoke_on_key_received (GstDtlsSrtpDec * decoder, guint cipher, guint auth )
+{
+	GST_DEBUG ("### handler for signal 'invoke-on-key-received'");		
+	GST_DEBUG ("### parmater [cipher : %d] [auth : %d]", cipher, auth);
+	g_signal_emit_by_name (decoder->bin.dtls_element, "invoke-on-key-received", cipher, auth);
+}
+
+static void 
+gst_dtls_srtp_dec_invoke_on_peer_certificate_received (GstDtlsSrtpDec * decoder, gchar *peer_pem)
+{
+	GST_DEBUG ("### handler for signal 'on-peer-certificate-received'");
+
+	g_signal_emit_by_name ( decoder->bin.dtls_element, "invoke-on-peer-certificate-received", g_strdup (peer_pem) );
+}
+

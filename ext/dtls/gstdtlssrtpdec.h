@@ -46,10 +46,20 @@ struct _GstDtlsSrtpDec {
 
     GstElement *dtls_srtp_demux;
     GstElement *srtp_dec;
+
+		/* lunker:: add prop for bind prop with gstdtlsdec */
+		GstBuffer *decoder_key;
+		/* lunker::TODO need to call it ?*/
+		guint srtp_cipher;
+		guint srtp_auth;
+	
+		// gchar *peer_pem;
 };
 
 struct _GstDtlsSrtpDecClass {
     GstDtlsSrtpBinClass parent_class;
+		void (* invoke_on_key_received) (GstDtlsSrtpDec * decoder, guint cipher, guint auth);
+		void (* invoke_on_peer_certificate_received) (GstDtlsSrtpDec * decoder, gchar *peer_pem);
 };
 
 GType gst_dtls_srtp_dec_get_type(void);

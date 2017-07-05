@@ -48,14 +48,16 @@ struct _GstDtlsSrtpEnc {
     GstElement *srtp_enc;
     GstElement *funnel;
 		GstBuffer *dtls_key;
-		guint rtp_cipher;
-		guint rtp_auth;
+		GstBuffer *encoder_key;
+		guint srtp_cipher;
+		guint srtp_auth;
 };
 
 struct _GstDtlsSrtpEncClass {
     GstDtlsSrtpBinClass parent_class;
 
 		gchar* (*on_handshake_complete) (GstDtlsSrtpEnc * encoder, gchar *key);
+		void (* invoke_on_key_received) (GstDtlsSrtpEnc * encoder);
 };
 
 GType gst_dtls_srtp_enc_get_type(void);
