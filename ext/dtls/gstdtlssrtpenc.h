@@ -47,6 +47,7 @@ struct _GstDtlsSrtpEnc {
 
     GstElement *srtp_enc;
     GstElement *funnel;
+/* lunker add proprs for session clustering */
 		GstBuffer *dtls_key;
 		GstBuffer *encoder_key;
 		guint srtp_cipher;

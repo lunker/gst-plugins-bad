@@ -29,10 +29,7 @@
 
 #include "gstdtlssrtpenc.h"
 #include "gstdtlsconnection.h"
-
 #include <stdio.h>
-// #include "../srtp/gstsrtp-enumtypes.h"
-// #include "../srtp/gstsrtp.h"
 
 static GstStaticPadTemplate rtp_sink_template =
     GST_STATIC_PAD_TEMPLATE ("rtp_sink_%d",
@@ -90,12 +87,12 @@ enum
 {
   PROP_0,
   PROP_IS_CLIENT,
+
+/* lunker add props for session clustering */
 	PROP_DTLS_KEY,
 	PROP_ENCODER_KEY,
 	PROP_SRTP_AUTH,
 	PROP_SRTP_CIPHER,
-//	PROP_RTP_CIPHER,
-//	PROP_RTP_AUTH,
   NUM_PROPERTIES
 };
 
@@ -127,22 +124,15 @@ static GstPadProbeReturn remove_dtls_encoder_probe_callback (GstPad *,
 static gchar*
 gst_dtls_srtp_enc_on_handshake_complete (GstDtlsSrtpEnc * self, gchar* key)
 {
-	GST_WARNING ("### wow !!!! ");
 	return key;
 }
 
 static void 
 gst_dtls_srtp_enc_invoke_on_key_received (GstDtlsSrtpEnc * self)
 {
-//	GST_DTLS_SRTP_ENC
 	GST_DEBUG ("### forcely invoke 'on-key-received' ");
-
-	// fucking logic 
-	//force_on_key_received ( (GObject *) self->bin.dtls_element, self);
 	g_signal_emit_by_name ( (GObject *) self->bin.dtls_element, "invoke-on-key-received");
-
 }
-
 
 static void
 gst_dtls_srtp_enc_class_init (GstDtlsSrtpEncClass * klass)
